@@ -1,0 +1,23 @@
+// Execute after importing the baseline. Keeps all original data.
+MATCH (o:Order)-[:CONTAINS]->(i:OrderItem)-[:SELECTS]->(v:MenuVariant)
+MERGE (o)-[r:CONTAINS_VARIANT {lineNumber:i.lineNumber}]->(v)
+SET r.quantity=i.quantity,r.unitPrice=i.unitPrice,r.specialInstructions=i.specialInstructions;
+
+MATCH (o:Order)-[:CONTAINS]->(i:OrderItem)-[:SELECTS]->(v:MenuVariant)
+OPTIONAL MATCH (o)-[r:CONTAINS_VARIANT]->(v) WHERE r.lineNumber=i.lineNumber
+WITH i,count(r) AS matches,collect(r) AS relationships
+WITH i,matches,head(relationships) AS r
+RETURN count(*) AS linesChecked,
+ sum(CASE WHEN matches=1 AND r.quantity=i.quantity AND r.unitPrice=i.unitPrice
+ AND (r.specialInstructions=i.specialInstructions OR (r.specialInstructions IS NULL AND i.specialInstructions IS NULL))
+ THEN 0 ELSE 1 END) AS mismatchedLines;
+
+PROFILE
+MATCH (o:Order)-[:CONTAINS]->(i:OrderItem)-[:SELECTS]->(v:MenuVariant)
+RETURN o.orderId AS orderId,v.variantId AS variantId,i.lineNumber AS lineNumber,
+ i.quantity AS quantity,i.unitPrice AS unitPrice ORDER BY orderId,lineNumber;
+
+PROFILE
+MATCH (o:Order)-[r:CONTAINS_VARIANT]->(v:MenuVariant)
+RETURN o.orderId AS orderId,v.variantId AS variantId,r.lineNumber AS lineNumber,
+ r.quantity AS quantity,r.unitPrice AS unitPrice ORDER BY orderId,lineNumber;

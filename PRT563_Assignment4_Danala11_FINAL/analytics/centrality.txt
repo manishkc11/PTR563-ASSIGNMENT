@@ -1,0 +1,71 @@
+// Neo4j 2026.09.0 / GDS 2026.09.0: run one statement at a time.
+// Reproduced in the guided Desktop session on 3 October 2026.
+RETURN gds.version() AS gdsVersion;
+// Drop only this named in-memory graph if present.
+CALL gds.graph.drop('customerMenuCompleted', false) YIELD graphName RETURN graphName;
+// Rebuild derived edges; source records are unchanged.
+MATCH (:Customer)-[r:PURCHASED_COMPLETED]->(:MenuItem) DELETE r;
+MATCH (c:Customer)-[:PLACES]->(o:Order)-[:CONTAINS]->(l:OrderItem)
+      -[:SELECTS]->(:MenuVariant)<-[:HAS_VARIANT]-(m:MenuItem)
+WHERE o.orderStatus = 'Completed'
+WITH c,m,sum(l.quantity) AS quantity,count(DISTINCT o) AS orderCount
+MERGE (c)-[r:PURCHASED_COMPLETED]->(m)
+SET r.quantity=toFloat(quantity), r.orderCount=orderCount;
+CALL gds.graph.project('customerMenuCompleted', ['Customer','MenuItem'],
+ {PURCHASED_COMPLETED:{orientation:'UNDIRECTED',properties:['quantity']}})
+YIELD graphName,nodeCount,relationshipCount RETURN graphName,nodeCount,relationshipCount;
+
+// degree
+CALL gds.degree.stream('customerMenuCompleted', {concurrency:1})
+YIELD nodeId,score
+WITH gds.util.asNode(nodeId) AS n,score WHERE n:MenuItem
+RETURN n.menuItemId AS menuItemId,n.itemName AS itemName,score
+ORDER BY score DESC,menuItemId;
+
+// weighted_degree
+CALL gds.degree.stream('customerMenuCompleted', {concurrency:1,relationshipWeightProperty:'quantity'})
+YIELD nodeId,score
+WITH gds.util.asNode(nodeId) AS n,score WHERE n:MenuItem
+RETURN n.menuItemId AS menuItemId,n.itemName AS itemName,score
+ORDER BY score DESC,menuItemId;
+
+// pagerank
+CALL gds.pageRank.stream('customerMenuCompleted', {concurrency:1,dampingFactor:0.85,maxIterations:100,tolerance:0.0000001})
+YIELD nodeId,score
+WITH gds.util.asNode(nodeId) AS n,score WHERE n:MenuItem
+RETURN n.menuItemId AS menuItemId,n.itemName AS itemName,score
+ORDER BY score DESC,menuItemId;
+
+// weighted_pagerank
+CALL gds.pageRank.stream('customerMenuCompleted', {concurrency:1,dampingFactor:0.85,maxIterations:100,tolerance:0.0000001,relationshipWeightProperty:'quantity'})
+YIELD nodeId,score
+WITH gds.util.asNode(nodeId) AS n,score WHERE n:MenuItem
+RETURN n.menuItemId AS menuItemId,n.itemName AS itemName,score
+ORDER BY score DESC,menuItemId;
+
+// betweenness
+CALL gds.betweenness.stream('customerMenuCompleted', {concurrency:1})
+YIELD nodeId,score
+WITH gds.util.asNode(nodeId) AS n,score WHERE n:MenuItem
+RETURN n.menuItemId AS menuItemId,n.itemName AS itemName,score
+ORDER BY score DESC,menuItemId;
+
+// closeness
+CALL gds.closeness.stream('customerMenuCompleted', {concurrency:1,useWassermanFaust:true})
+YIELD nodeId,score
+WITH gds.util.asNode(nodeId) AS n,score WHERE n:MenuItem
+RETURN n.menuItemId AS menuItemId,n.itemName AS itemName,score
+ORDER BY score DESC,menuItemId;
+
+// harmonic
+CALL gds.closeness.harmonic.stream('customerMenuCompleted', {concurrency:1})
+YIELD nodeId,score
+WITH gds.util.asNode(nodeId) AS n,score WHERE n:MenuItem
+RETURN n.menuItemId AS menuItemId,n.itemName AS itemName,score
+ORDER BY score DESC,menuItemId;
+
+
+// Structural check, not an additional centrality algorithm.
+CALL gds.wcc.stream('customerMenuCompleted') YIELD componentId
+WITH componentId,count(*) AS componentSize
+RETURN componentSize,count(*) AS numberOfComponents ORDER BY componentSize DESC;

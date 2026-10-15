@@ -1,0 +1,206 @@
+// FINAL WORKING VERSION
+// CSV preparation, node import, subtype labels,
+// constraints, index, nodes, subtype labels and relationships
+
+
+CREATE CONSTRAINT customer_identity IF NOT EXISTS
+FOR (n:Customer) REQUIRE n.customerId IS UNIQUE;
+
+CREATE CONSTRAINT address_identity IF NOT EXISTS
+FOR (n:Address) REQUIRE n.addressId IS UNIQUE;
+
+CREATE CONSTRAINT store_identity IF NOT EXISTS
+FOR (n:Store) REQUIRE n.storeId IS UNIQUE;
+
+CREATE CONSTRAINT driver_identity IF NOT EXISTS
+FOR (n:Driver) REQUIRE n.driverId IS UNIQUE;
+
+CREATE CONSTRAINT menucategory_identity IF NOT EXISTS
+FOR (n:MenuCategory) REQUIRE n.categoryId IS UNIQUE;
+
+CREATE CONSTRAINT menuitem_identity IF NOT EXISTS
+FOR (n:MenuItem) REQUIRE n.menuItemId IS UNIQUE;
+
+CREATE CONSTRAINT menuvariant_identity IF NOT EXISTS
+FOR (n:MenuVariant) REQUIRE n.variantId IS UNIQUE;
+
+CREATE CONSTRAINT order_identity IF NOT EXISTS
+FOR (n:Order) REQUIRE n.orderId IS UNIQUE;
+
+CREATE CONSTRAINT orderitem_identity IF NOT EXISTS
+FOR (n:OrderItem) REQUIRE (n.orderId, n.lineNumber) IS UNIQUE;
+
+CREATE CONSTRAINT payment_identity IF NOT EXISTS
+FOR (n:Payment) REQUIRE n.paymentId IS UNIQUE;
+
+CREATE CONSTRAINT delivery_identity IF NOT EXISTS
+FOR (n:Delivery) REQUIRE n.deliveryId IS UNIQUE;
+
+CREATE INDEX menuvariant_price IF NOT EXISTS
+FOR (v:MenuVariant) ON (v.currentPrice);
+
+// Customer
+LOAD CSV WITH HEADERS FROM 'file:///customer.csv' AS row
+MERGE (n:Customer {customerId: toInteger(row.CustomerID)})
+SET n.firstName = CASE WHEN row.FirstName = '' THEN null ELSE row.FirstName END,
+    n.lastName = CASE WHEN row.LastName = '' THEN null ELSE row.LastName END,
+    n.email = CASE WHEN row.Email = '' THEN null ELSE row.Email END,
+    n.phone = CASE WHEN row.Phone = '' THEN null ELSE row.Phone END,
+    n.loyaltyPoints = CASE WHEN row.LoyaltyPoints = '' THEN null ELSE toInteger(row.LoyaltyPoints) END;
+
+// Address
+LOAD CSV WITH HEADERS FROM 'file:///address.csv' AS row
+MERGE (n:Address {addressId: toInteger(row.AddressID)})
+SET n.streetAddress = CASE WHEN row.StreetAddress = '' THEN null ELSE row.StreetAddress END,
+    n.suburb = CASE WHEN row.Suburb = '' THEN null ELSE row.Suburb END,
+    n.state = CASE WHEN row.State = '' THEN null ELSE row.State END,
+    n.postcode = CASE WHEN row.Postcode = '' THEN null ELSE row.Postcode END;
+
+// Store
+LOAD CSV WITH HEADERS FROM 'file:///store.csv' AS row
+MERGE (n:Store {storeId: toInteger(row.StoreID)})
+SET n.storeName = CASE WHEN row.StoreName = '' THEN null ELSE row.StoreName END,
+    n.streetAddress = CASE WHEN row.StreetAddress = '' THEN null ELSE row.StreetAddress END,
+    n.suburb = CASE WHEN row.Suburb = '' THEN null ELSE row.Suburb END,
+    n.state = CASE WHEN row.State = '' THEN null ELSE row.State END,
+    n.postcode = CASE WHEN row.Postcode = '' THEN null ELSE row.Postcode END,
+    n.phone = CASE WHEN row.Phone = '' THEN null ELSE row.Phone END;
+
+// Driver
+LOAD CSV WITH HEADERS FROM 'file:///driver.csv' AS row
+MERGE (n:Driver {driverId: toInteger(row.DriverID)})
+SET n.firstName = CASE WHEN row.FirstName = '' THEN null ELSE row.FirstName END,
+    n.lastName = CASE WHEN row.LastName = '' THEN null ELSE row.LastName END,
+    n.phone = CASE WHEN row.Phone = '' THEN null ELSE row.Phone END,
+    n.driverStatus = CASE WHEN row.DriverStatus = '' THEN null ELSE row.DriverStatus END;
+
+// MenuCategory
+LOAD CSV WITH HEADERS FROM 'file:///menu_category.csv' AS row
+MERGE (n:MenuCategory {categoryId: toInteger(row.CategoryID)})
+SET n.categoryName = CASE WHEN row.CategoryName = '' THEN null ELSE row.CategoryName END,
+    n.description = CASE WHEN row.Description = '' THEN null ELSE row.Description END;
+
+// MenuItem
+LOAD CSV WITH HEADERS FROM 'file:///menu_item.csv' AS row
+MERGE (n:MenuItem {menuItemId: toInteger(row.MenuItemID)})
+SET n.itemName = CASE WHEN row.ItemName = '' THEN null ELSE row.ItemName END,
+    n.description = CASE WHEN row.Description = '' THEN null ELSE row.Description END,
+    n.availabilityStatus = CASE WHEN row.AvailabilityStatus = '' THEN null ELSE row.AvailabilityStatus END;
+
+// MenuVariant
+LOAD CSV WITH HEADERS FROM 'file:///menu_variant.csv' AS row
+MERGE (n:MenuVariant {variantId: toInteger(row.VariantID)})
+SET n.size = CASE WHEN row.Size = '' THEN null ELSE row.Size END,
+    n.crustType = CASE WHEN row.CrustType = '' THEN null ELSE row.CrustType END,
+    n.currentPrice = CASE WHEN row.CurrentPrice = '' THEN null ELSE toFloat(row.CurrentPrice) END,
+    n.availabilityStatus = CASE WHEN row.AvailabilityStatus = '' THEN null ELSE row.AvailabilityStatus END;
+
+// Order
+LOAD CSV WITH HEADERS FROM 'file:///orders.csv' AS row
+MERGE (n:Order {orderId: toInteger(row.OrderID)})
+SET n.orderDateTime =
+        CASE WHEN row.OrderDateTime = '' THEN null
+             ELSE localdatetime(replace(row.OrderDateTime, ' ', 'T')) END,
+    n.orderStatus = CASE WHEN row.OrderStatus = '' THEN null ELSE row.OrderStatus END;
+
+// OrderItem
+LOAD CSV WITH HEADERS FROM 'file:///order_item.csv' AS row
+MERGE (n:OrderItem {orderId: toInteger(row.OrderID), lineNumber: toInteger(row.LineNumber)})
+SET n.quantity = toInteger(row.Quantity),
+    n.unitPrice = toFloat(row.UnitPrice),
+    n.specialInstructions =
+        CASE WHEN row.SpecialInstructions = '' THEN null ELSE row.SpecialInstructions END;
+
+// Payment
+LOAD CSV WITH HEADERS FROM 'file:///payment.csv' AS row
+MERGE (n:Payment {paymentId: toInteger(row.PaymentID)})
+SET n.paymentMethod = CASE WHEN row.PaymentMethod = '' THEN null ELSE row.PaymentMethod END,
+    n.paymentAmount = CASE WHEN row.PaymentAmount = '' THEN null ELSE toFloat(row.PaymentAmount) END,
+    n.paymentStatus = CASE WHEN row.PaymentStatus = '' THEN null ELSE row.PaymentStatus END,
+    n.paymentDateTime =
+        CASE WHEN row.PaymentDateTime = '' THEN null
+             ELSE localdatetime(replace(row.PaymentDateTime, ' ', 'T')) END,
+    n.voucherCode = CASE WHEN row.VoucherCode = '' THEN null ELSE row.VoucherCode END,
+    n.priorityFee = CASE WHEN row.PriorityFee = '' THEN null ELSE toFloat(row.PriorityFee) END;
+
+// Delivery
+LOAD CSV WITH HEADERS FROM 'file:///delivery.csv' AS row
+MERGE (n:Delivery {deliveryId: toInteger(row.DeliveryID)})
+SET n.trackerStatus = CASE WHEN row.TrackerStatus = '' THEN null ELSE row.TrackerStatus END,
+    n.dispatchTime =
+        CASE WHEN row.DispatchTime = '' THEN null
+             ELSE localdatetime(replace(row.DispatchTime, ' ', 'T')) END,
+    n.deliveredTime =
+        CASE WHEN row.DeliveredTime = '' THEN null
+             ELSE localdatetime(replace(row.DeliveredTime, ' ', 'T')) END,
+    n.estimatedDeliveryTime =
+        CASE WHEN row.EstimatedDeliveryTime = '' THEN null
+             ELSE localdatetime(replace(row.EstimatedDeliveryTime, ' ', 'T')) END;
+
+// Order subtype labels
+LOAD CSV WITH HEADERS FROM 'file:///pickup_order.csv' AS row
+MATCH (n:Order {orderId: toInteger(row.OrderID)})
+SET n:PickupOrder;
+
+LOAD CSV WITH HEADERS FROM 'file:///delivery_order.csv' AS row
+MATCH (n:Order {orderId: toInteger(row.OrderID)})
+SET n:DeliveryOrder;
+LOAD CSV WITH HEADERS FROM 'file:///address.csv' AS row
+MATCH (a:Customer {customerId: toInteger(row.CustomerID)})
+MATCH (b:Address {addressId: toInteger(row.AddressID)})
+MERGE (a)-[:HAS_ADDRESS]->(b);
+
+LOAD CSV WITH HEADERS FROM 'file:///driver.csv' AS row
+MATCH (a:Driver {driverId: toInteger(row.DriverID)})
+MATCH (b:Store {storeId: toInteger(row.StoreID)})
+MERGE (a)-[:WORKS_AT]->(b);
+
+LOAD CSV WITH HEADERS FROM 'file:///menu_item.csv' AS row
+MATCH (a:MenuItem {menuItemId: toInteger(row.MenuItemID)})
+MATCH (b:MenuCategory {categoryId: toInteger(row.CategoryID)})
+MERGE (a)-[:IN_CATEGORY]->(b);
+
+LOAD CSV WITH HEADERS FROM 'file:///menu_variant.csv' AS row
+MATCH (a:MenuItem {menuItemId: toInteger(row.MenuItemID)})
+MATCH (b:MenuVariant {variantId: toInteger(row.VariantID)})
+MERGE (a)-[:HAS_VARIANT]->(b);
+
+LOAD CSV WITH HEADERS FROM 'file:///orders.csv' AS row
+MATCH (a:Customer {customerId: toInteger(row.CustomerID)})
+MATCH (b:Order {orderId: toInteger(row.OrderID)})
+MERGE (a)-[:PLACES]->(b);
+
+LOAD CSV WITH HEADERS FROM 'file:///orders.csv' AS row
+MATCH (a:Store {storeId: toInteger(row.StoreID)})
+MATCH (b:Order {orderId: toInteger(row.OrderID)})
+MERGE (a)-[:PROCESSES]->(b);
+
+LOAD CSV WITH HEADERS FROM 'file:///order_item.csv' AS row
+MATCH (a:Order {orderId: toInteger(row.OrderID)})
+MATCH (b:OrderItem {orderId: toInteger(row.OrderID), lineNumber: toInteger(row.LineNumber)})
+MERGE (a)-[:CONTAINS]->(b);
+
+LOAD CSV WITH HEADERS FROM 'file:///order_item.csv' AS row
+MATCH (a:OrderItem {orderId: toInteger(row.OrderID), lineNumber: toInteger(row.LineNumber)})
+MATCH (b:MenuVariant {variantId: toInteger(row.VariantID)})
+MERGE (a)-[:SELECTS]->(b);
+
+LOAD CSV WITH HEADERS FROM 'file:///payment.csv' AS row
+MATCH (a:Order {orderId: toInteger(row.OrderID)})
+MATCH (b:Payment {paymentId: toInteger(row.PaymentID)})
+MERGE (a)-[:SETTLED_BY]->(b);
+
+LOAD CSV WITH HEADERS FROM 'file:///delivery.csv' AS row
+MATCH (a:DeliveryOrder {orderId: toInteger(row.OrderID)})
+MATCH (b:Delivery {deliveryId: toInteger(row.DeliveryID)})
+MERGE (a)-[:FULFILLED_BY]->(b);
+
+LOAD CSV WITH HEADERS FROM 'file:///delivery.csv' AS row
+MATCH (a:Driver {driverId: toInteger(row.DriverID)})
+MATCH (b:Delivery {deliveryId: toInteger(row.DeliveryID)})
+MERGE (a)-[:PERFORMS]->(b);
+
+LOAD CSV WITH HEADERS FROM 'file:///delivery.csv' AS row
+MATCH (a:Delivery {deliveryId: toInteger(row.DeliveryID)})
+MATCH (b:Address {addressId: toInteger(row.AddressID)})
+MERGE (a)-[:TO_ADDRESS]->(b);

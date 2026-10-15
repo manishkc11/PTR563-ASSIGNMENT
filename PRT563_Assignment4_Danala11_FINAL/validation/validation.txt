@@ -1,0 +1,34 @@
+// Run BEFORE analytics on a newly imported database.
+MATCH (n) RETURN count(n) AS nodes; // 140
+MATCH ()-[r]->() RETURN count(r) AS relationships; // 170
+MATCH (n) UNWIND labels(n) AS label
+RETURN label,count(*) AS nodes ORDER BY label;
+// Subtype labels overlap Order. Do not add these label totals as distinct nodes.
+MATCH ()-[r]->() RETURN type(r) AS relationshipType,count(*) AS total
+ORDER BY relationshipType;
+MATCH (o:Order)
+RETURN count(o) AS orders,
+ sum(CASE WHEN o:PickupOrder THEN 1 ELSE 0 END) AS pickups,
+ sum(CASE WHEN o:DeliveryOrder THEN 1 ELSE 0 END) AS deliveries,
+ sum(CASE WHEN o:PickupOrder AND o:DeliveryOrder THEN 1 ELSE 0 END) AS both,
+ sum(CASE WHEN NOT o:PickupOrder AND NOT o:DeliveryOrder THEN 1 ELSE 0 END) AS neither;
+// Expected 20,10,10,0,0.
+MATCH (o:Order)
+OPTIONAL MATCH (c:Customer)-[:PLACES]->(o)
+WITH o,count(c) AS owners WHERE owners <> 1
+RETURN o.orderId,owners; // zero rows
+MATCH (o:Order)
+OPTIONAL MATCH (o)-[:SETTLED_BY]->(p:Payment)
+WITH o,count(p) AS payments WHERE payments <> 1
+RETURN o.orderId,payments; // zero rows in this source snapshot
+MATCH (i:OrderItem)
+OPTIONAL MATCH (:Order)-[r:CONTAINS]->(i)
+WITH i,count(r) AS owners
+OPTIONAL MATCH (i)-[s:SELECTS]->(:MenuVariant)
+WITH i,owners,count(s) AS variants
+WHERE owners <> 1 OR variants <> 1
+RETURN i.orderId,i.lineNumber,owners,variants; // zero rows
+MATCH (n) WHERE NOT (n)--()
+RETURN labels(n) AS labels,n.categoryName AS category; // Pasta and Salads only
+SHOW CONSTRAINTS;
+SHOW INDEXES;

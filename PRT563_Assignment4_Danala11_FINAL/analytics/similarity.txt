@@ -1,0 +1,379 @@
+// STEP 1 - Baseline: Customer -> MenuItem purchase graph
+CALL gds.graph.drop('custItems', false) YIELD graphName RETURN graphName;
+
+MATCH (c:Customer)-[:PLACES]->(:Order)-[:CONTAINS]->(:OrderItem)
+      -[:SELECTS]->(:MenuVariant)<-[:HAS_VARIANT]-(m:MenuItem)
+WITH DISTINCT c, m
+WITH gds.graph.project('custItems', c, m,
+       {sourceNodeLabels: labels(c), targetNodeLabels: labels(m)}) AS g
+RETURN g.graphName AS graph, g.nodeCount AS nodes, g.relationshipCount AS rels;
+
+CALL gds.nodeSimilarity.stream('custItems')
+YIELD node1, node2, similarity
+RETURN gds.util.asNode(node1).firstName AS customer1,
+       gds.util.asNode(node2).firstName AS customer2, similarity
+ORDER BY similarity DESC;
+
+
+// STEP 2 - Customer feature graph (SimFeature + HAS_FEATURE)
+CREATE CONSTRAINT simfeature_identity IF NOT EXISTS
+FOR (f:SimFeature) REQUIRE f.name IS UNIQUE;
+
+// Postcode
+MATCH (c:Customer)-[:HAS_ADDRESS]->(a:Address)
+MERGE (f:SimFeature {name: 'Postcode:' + a.postcode})
+  ON CREATE SET f.type = 'Postcode', f.value = a.postcode
+MERGE (c)-[r:HAS_FEATURE]->(f)
+SET r.weight = 1.0;
+
+// Loyalty tier
+MATCH (c:Customer)
+WITH c, CASE WHEN c.loyaltyPoints > 0 THEN 'Member' ELSE 'Non-member' END AS tier
+MERGE (f:SimFeature {name: 'Loyalty:' + tier})
+  ON CREATE SET f.type = 'Loyalty', f.value = tier
+MERGE (c)-[r:HAS_FEATURE]->(f)
+SET r.weight = 1.0;
+
+// Product group, size, price band and crust (weight = quantity bought)
+MATCH (c:Customer)-[:PLACES]->(:Order)-[:CONTAINS]->(l:OrderItem)
+      -[:SELECTS]->(v:MenuVariant)<-[:HAS_VARIANT]-(m:MenuItem)
+      -[:IN_CATEGORY]->(cat:MenuCategory)
+WITH c, l.quantity AS qty, [
+       ['ProductGroup', CASE WHEN cat.categoryName ENDS WITH 'Pizzas'
+                             THEN 'Pizza' ELSE cat.categoryName END],
+       ['Size', v.size],
+       ['PriceBand', CASE WHEN v.currentPrice >= 15 THEN 'Premium'
+                          WHEN v.currentPrice >= 10 THEN 'Mid'
+                          ELSE 'Budget' END],
+       ['Crust', v.crustType]
+     ] AS feats
+UNWIND feats AS ft
+WITH c, ft[0] AS fType, ft[1] AS fValue, qty
+WHERE fValue IS NOT NULL
+WITH c, fType, fValue, sum(qty) AS weight
+MERGE (f:SimFeature {name: fType + ':' + fValue})
+  ON CREATE SET f.type = fType, f.value = fValue
+MERGE (c)-[r:HAS_FEATURE]->(f)
+SET r.weight = toFloat(weight);
+
+// Feature IDs (used by KNN Jaccard)
+MATCH (f:SimFeature)
+WITH f ORDER BY f.name
+WITH collect(f) AS fs
+UNWIND range(0, size(fs) - 1) AS i
+WITH fs[i] AS f, i
+SET f.featureId = i + 1;
+
+MATCH (c:Customer)-[:HAS_FEATURE]->(f:SimFeature)
+WITH c, collect(f.featureId) AS ids
+SET c.featureIds = ids;
+
+// Check: 25 SimFeature nodes, 56 HAS_FEATURE relationships
+MATCH (f:SimFeature)
+WITH count(f) AS featureNodes
+MATCH ()-[r:HAS_FEATURE]->()
+RETURN featureNodes, count(r) AS featureRels;
+
+MATCH (c:Customer)-[r:HAS_FEATURE]->(f:SimFeature)
+RETURN c.customerId AS id, c.firstName AS customer,
+       collect(f.name + ' (' + toString(r.weight) + ')') AS features
+ORDER BY id;
+
+
+// STEP 3 - Spending profile (scaled 0-1)
+MATCH (c:Customer)-[:PLACES]->(:Order)-[:SETTLED_BY]->(p:Payment)
+WITH c, sum(p.paymentAmount) AS spent
+MATCH (c)-[:PLACES]->(:Order)-[:CONTAINS]->(l:OrderItem)
+WITH c, spent, sum(l.quantity) AS qty
+SET c.totalSpent = spent, c.totalQty = qty, c.avgItemPrice = spent / qty;
+
+MATCH (c:Customer)
+WITH min(c.totalSpent) AS minS, max(c.totalSpent) AS maxS,
+     min(c.totalQty) AS minQ, max(c.totalQty) AS maxQ,
+     min(c.avgItemPrice) AS minP, max(c.avgItemPrice) AS maxP,
+     min(c.loyaltyPoints) AS minL, max(c.loyaltyPoints) AS maxL
+MATCH (c:Customer)
+SET c.profileVec = [
+      (c.totalSpent - minS) / (maxS - minS),
+      toFloat(c.totalQty - minQ) / (maxQ - minQ),
+      (c.avgItemPrice - minP) / (maxP - minP),
+      toFloat(c.loyaltyPoints - minL) / (maxL - minL) ];
+
+MATCH (c:Customer)
+RETURN c.customerId AS id, c.firstName AS customer,
+       c.totalSpent AS spent, c.totalQty AS qty,
+       round(c.avgItemPrice, 2) AS avgItemPrice, c.loyaltyPoints AS loyalty,
+       [x IN c.profileVec | round(x, 4)] AS profileVec
+ORDER BY id;
+
+
+// STEP 4 - In-memory graph projections
+CALL gds.graph.drop('custFeatures', false) YIELD graphName RETURN graphName;
+
+CALL gds.graph.project(
+  'custFeatures',
+  ['Customer', 'SimFeature'],
+  {HAS_FEATURE: {orientation: 'NATURAL', properties: 'weight'}}
+)
+YIELD graphName, nodeCount, relationshipCount
+RETURN graphName, nodeCount, relationshipCount;
+
+CALL gds.graph.drop('custProfile', false) YIELD graphName RETURN graphName;
+
+CALL gds.graph.project(
+  'custProfile',
+  {Customer: {properties: ['profileVec', 'featureIds']}},
+  '*'
+)
+YIELD graphName, nodeCount, relationshipCount
+RETURN graphName, nodeCount, relationshipCount;
+
+
+// STEP 5 - Node Similarity
+// Jaccard
+CALL gds.nodeSimilarity.stream('custFeatures', {
+  similarityMetric: 'JACCARD', topK: 3, concurrency: 1
+})
+YIELD node1, node2, similarity
+RETURN gds.util.asNode(node1).firstName AS customer,
+       gds.util.asNode(node2).firstName AS similarCustomer,
+       round(similarity, 4) AS jaccard
+ORDER BY jaccard DESC, customer, similarCustomer;
+
+// Overlap
+CALL gds.nodeSimilarity.stream('custFeatures', {
+  similarityMetric: 'OVERLAP', topK: 3, concurrency: 1
+})
+YIELD node1, node2, similarity
+RETURN gds.util.asNode(node1).firstName AS customer,
+       gds.util.asNode(node2).firstName AS similarCustomer,
+       round(similarity, 4) AS overlap
+ORDER BY overlap DESC, customer, similarCustomer;
+
+// Cosine
+CALL gds.nodeSimilarity.stream('custFeatures', {
+  similarityMetric: 'COSINE', topK: 3, concurrency: 1
+})
+YIELD node1, node2, similarity
+RETURN gds.util.asNode(node1).firstName AS customer,
+       gds.util.asNode(node2).firstName AS similarCustomer,
+       round(similarity, 4) AS cosine
+ORDER BY cosine DESC, customer, similarCustomer;
+
+// Weighted Jaccard
+CALL gds.nodeSimilarity.stream('custFeatures', {
+  similarityMetric: 'JACCARD', relationshipWeightProperty: 'weight',
+  topK: 3, concurrency: 1
+})
+YIELD node1, node2, similarity
+RETURN gds.util.asNode(node1).firstName AS customer,
+       gds.util.asNode(node2).firstName AS similarCustomer,
+       round(similarity, 4) AS weightedJaccard
+ORDER BY weightedJaccard DESC, customer, similarCustomer;
+
+// Weighted Cosine
+CALL gds.nodeSimilarity.stream('custFeatures', {
+  similarityMetric: 'COSINE', relationshipWeightProperty: 'weight',
+  topK: 3, concurrency: 1
+})
+YIELD node1, node2, similarity
+RETURN gds.util.asNode(node1).firstName AS customer,
+       gds.util.asNode(node2).firstName AS similarCustomer,
+       round(similarity, 4) AS weightedCosine
+ORDER BY weightedCosine DESC, customer, similarCustomer;
+
+// Cutoff tuning
+CALL gds.nodeSimilarity.stream('custFeatures', {
+  topK: 3, similarityCutoff: 0.4, degreeCutoff: 6, concurrency: 1
+})
+YIELD node1, node2, similarity
+RETURN gds.util.asNode(node1).firstName AS customer,
+       gds.util.asNode(node2).firstName AS similarCustomer,
+       round(similarity, 4) AS jaccard
+ORDER BY jaccard DESC, customer, similarCustomer;
+
+// Stats
+CALL gds.nodeSimilarity.stats('custFeatures', {topK: 3, concurrency: 1})
+YIELD nodesCompared, similarityPairs, similarityDistribution
+RETURN nodesCompared, similarityPairs,
+       round(similarityDistribution.min, 4)  AS minSim,
+       round(similarityDistribution.mean, 4) AS meanSim,
+       round(similarityDistribution.max, 4)  AS maxSim;
+
+// Filtered Node Similarity: non-members -> loyalty members
+MATCH (c:Customer)
+WITH collect(CASE WHEN c.loyaltyPoints > 0  THEN c END) AS members,
+     collect(CASE WHEN c.loyaltyPoints = 0 THEN c END) AS nonMembers
+CALL gds.nodeSimilarity.filtered.stream('custFeatures', {
+  sourceNodeFilter: nonMembers, targetNodeFilter: members,
+  topK: 2, concurrency: 1
+})
+YIELD node1, node2, similarity
+RETURN gds.util.asNode(node1).firstName AS nonMember,
+       gds.util.asNode(node2).firstName AS lookAlikeMember,
+       round(similarity, 4) AS jaccard
+ORDER BY jaccard DESC, nonMember;
+
+
+// STEP 6 - K-Nearest Neighbours (fixed seed for repeatable results)
+// Cosine
+CALL gds.knn.stream('custProfile', {
+  nodeProperties: {profileVec: 'COSINE'}, topK: 3,
+  sampleRate: 1.0, deltaThreshold: 0.0, randomSeed: 42, concurrency: 1
+})
+YIELD node1, node2, similarity
+RETURN gds.util.asNode(node1).firstName AS customer,
+       gds.util.asNode(node2).firstName AS similarCustomer,
+       round(similarity, 4) AS knnCosine
+ORDER BY knnCosine DESC, customer, similarCustomer;
+
+// Euclidean
+CALL gds.knn.stream('custProfile', {
+  nodeProperties: {profileVec: 'EUCLIDEAN'}, topK: 3,
+  sampleRate: 1.0, deltaThreshold: 0.0, randomSeed: 42, concurrency: 1
+})
+YIELD node1, node2, similarity
+RETURN gds.util.asNode(node1).firstName AS customer,
+       gds.util.asNode(node2).firstName AS similarCustomer,
+       round(similarity, 4) AS knnEuclidean
+ORDER BY knnEuclidean DESC, customer, similarCustomer;
+
+// Pearson
+CALL gds.knn.stream('custProfile', {
+  nodeProperties: {profileVec: 'PEARSON'}, topK: 3,
+  sampleRate: 1.0, deltaThreshold: 0.0, randomSeed: 42, concurrency: 1
+})
+YIELD node1, node2, similarity
+RETURN gds.util.asNode(node1).firstName AS customer,
+       gds.util.asNode(node2).firstName AS similarCustomer,
+       round(similarity, 4) AS knnPearson
+ORDER BY knnPearson DESC, customer, similarCustomer;
+
+// Jaccard on feature IDs
+CALL gds.knn.stream('custProfile', {
+  nodeProperties: {featureIds: 'JACCARD'}, topK: 3,
+  sampleRate: 1.0, deltaThreshold: 0.0, randomSeed: 42, concurrency: 1
+})
+YIELD node1, node2, similarity
+RETURN gds.util.asNode(node1).firstName AS customer,
+       gds.util.asNode(node2).firstName AS similarCustomer,
+       round(similarity, 4) AS knnJaccard
+ORDER BY knnJaccard DESC, customer, similarCustomer;
+
+// Filtered KNN: non-members -> closest member
+MATCH (c:Customer)
+WITH collect(CASE WHEN c.loyaltyPoints > 0  THEN c END) AS members,
+     collect(CASE WHEN c.loyaltyPoints = 0 THEN c END) AS nonMembers
+CALL gds.knn.filtered.stream('custProfile', {
+  nodeProperties: {profileVec: 'EUCLIDEAN'}, topK: 1,
+  sourceNodeFilter: nonMembers, targetNodeFilter: members,
+  sampleRate: 1.0, deltaThreshold: 0.0, randomSeed: 42, concurrency: 1
+})
+YIELD node1, node2, similarity
+RETURN gds.util.asNode(node1).firstName AS nonMember,
+       gds.util.asNode(node2).firstName AS closestMember,
+       round(similarity, 4) AS knnEuclidean
+ORDER BY knnEuclidean DESC, nonMember;
+
+
+// STEP 7 - Similarity functions (manual check)
+MATCH (a:Customer {customerId: 1})
+MATCH (b:Customer {customerId: 2})
+RETURN round(gds.similarity.jaccard(a.featureIds, b.featureIds), 4)       AS jaccard,
+       round(gds.similarity.overlap(a.featureIds, b.featureIds), 4)       AS overlap,
+       round(gds.similarity.cosine(a.profileVec, b.profileVec), 4)        AS cosine,
+       round(gds.similarity.pearson(a.profileVec, b.profileVec), 4)       AS pearson,
+       round(gds.similarity.euclidean(a.profileVec, b.profileVec), 4)     AS euclidean,
+       round(gds.similarity.euclideanDistance(a.profileVec, b.profileVec), 4) AS euclideanDistance;
+
+MATCH (c:Customer)
+WITH collect(c) AS customers
+UNWIND customers AS a
+UNWIND customers AS b
+WITH a, b
+WHERE a.customerId < b.customerId
+RETURN a.firstName AS customerA, b.firstName AS customerB,
+       round(gds.similarity.jaccard(a.featureIds, b.featureIds), 4)   AS featureJaccard,
+       round(gds.similarity.euclidean(a.profileVec, b.profileVec), 4) AS spendEuclidean
+ORDER BY featureJaccard DESC, spendEuclidean DESC
+LIMIT 10;
+
+
+// STEP 8 - Final method: write SIMILAR_TO and recommend items
+MATCH ()-[r:SIMILAR_TO]->() DELETE r;
+
+CALL gds.nodeSimilarity.write('custFeatures', {
+  similarityMetric: 'JACCARD', topK: 3, similarityCutoff: 0.4,
+  writeRelationshipType: 'SIMILAR_TO', writeProperty: 'jaccard',
+  concurrency: 1
+})
+YIELD nodesCompared, relationshipsWritten
+RETURN nodesCompared, relationshipsWritten;
+
+MATCH p = (:Customer)-[:SIMILAR_TO]->(:Customer)
+RETURN p;
+
+// Recommendation: items bought by look-alikes but not by the customer
+MATCH (c:Customer)-[s:SIMILAR_TO]->(peer:Customer)-[:PLACES]->(:Order)
+      -[:CONTAINS]->(l:OrderItem)-[:SELECTS]->(:MenuVariant)
+      <-[:HAS_VARIANT]-(m:MenuItem)
+WHERE NOT EXISTS {
+  (c)-[:PLACES]->(:Order)-[:CONTAINS]->(:OrderItem)-[:SELECTS]->(:MenuVariant)
+     <-[:HAS_VARIANT]-(m)
+}
+WITH c, m, max(s.jaccard) AS similarity,
+     collect(DISTINCT peer.firstName) AS becauseOf,
+     sum(l.quantity) AS peerQuantity
+RETURN c.firstName + ' ' + c.lastName AS customer,
+       m.itemName AS recommendedItem,
+       round(similarity, 4) AS similarity, becauseOf, peerQuantity
+ORDER BY customer, similarity DESC, peerQuantity DESC;
+
+
+// STEP 9 - Agreement test: Node Similarity vs KNN top-1
+MATCH (a:Customer)-[:SIMILAR_TO]->(b:Customer)
+WITH collect(toString(a.customerId) + '-' + toString(b.customerId)) AS nsPairs,
+     collect(DISTINCT a.customerId) AS nsCustomers
+UNWIND ['COSINE', 'EUCLIDEAN', 'PEARSON', 'JACCARD'] AS metric
+CALL gds.knn.stream('custProfile', {
+  nodeProperties: CASE WHEN metric = 'JACCARD' THEN {featureIds: 'JACCARD'}
+                       ELSE {profileVec: metric} END,
+  topK: 1, sampleRate: 1.0, deltaThreshold: 0.0, randomSeed: 42, concurrency: 1
+})
+YIELD node1, node2
+WITH metric, nsPairs, nsCustomers,
+     gds.util.asNode(node1).customerId AS c1, gds.util.asNode(node2).customerId AS c2
+WHERE c1 IN nsCustomers
+WITH metric, count(*) AS customersCompared,
+     sum(CASE WHEN toString(c1) + '-' + toString(c2) IN nsPairs THEN 1 ELSE 0 END) AS agreements
+RETURN 'Node Similarity (Jaccard) vs KNN ' + metric AS comparison,
+       agreements, customersCompared,
+       round(toFloat(agreements) / customersCompared, 3) AS agreementRate
+ORDER BY agreementRate DESC;
+
+// Runtime comparison
+CALL gds.nodeSimilarity.stats('custFeatures', {similarityMetric: 'JACCARD', topK: 3, concurrency: 1})
+YIELD computeMillis, similarityPairs
+RETURN 'Node Similarity - Jaccard' AS algorithm, computeMillis, similarityPairs
+UNION ALL
+CALL gds.nodeSimilarity.stats('custFeatures', {similarityMetric: 'COSINE', relationshipWeightProperty: 'weight', topK: 3, concurrency: 1})
+YIELD computeMillis, similarityPairs
+RETURN 'Node Similarity - weighted Cosine' AS algorithm, computeMillis, similarityPairs
+UNION ALL
+CALL gds.knn.stats('custProfile', {nodeProperties: {profileVec: 'COSINE'}, topK: 3, sampleRate: 1.0, deltaThreshold: 0.0, randomSeed: 42, concurrency: 1})
+YIELD computeMillis, similarityPairs
+RETURN 'KNN - Cosine' AS algorithm, computeMillis, similarityPairs
+UNION ALL
+CALL gds.knn.stats('custProfile', {nodeProperties: {profileVec: 'EUCLIDEAN'}, topK: 3, sampleRate: 1.0, deltaThreshold: 0.0, randomSeed: 42, concurrency: 1})
+YIELD computeMillis, similarityPairs
+RETURN 'KNN - Euclidean' AS algorithm, computeMillis, similarityPairs
+UNION ALL
+CALL gds.nodeSimilarity.stats('custFeatures', {similarityMetric: 'JACCARD', topK: 3, similarityCutoff: 0.4, concurrency: 1})
+YIELD computeMillis, similarityPairs
+RETURN 'Node Similarity - Jaccard, cutoff 0.4 (final)' AS algorithm, computeMillis, similarityPairs;
+
+
+// STEP 10 - Clean-up of in-memory graphs
+CALL gds.graph.drop('custItems', false)    YIELD graphName RETURN graphName;
+CALL gds.graph.drop('custFeatures', false) YIELD graphName RETURN graphName;
+CALL gds.graph.drop('custProfile', false)  YIELD graphName RETURN graphName;

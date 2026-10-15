@@ -1,0 +1,49 @@
+{
+  "date": "2026-10-03",
+  "environment": {
+    "desktop": "2.2.1",
+    "neo4j": "2026.09.0",
+    "gds": "2026.09.0",
+    "cypher": "25"
+  },
+  "provenance": "Guided user Desktop execution; screenshots and exported plans. Earlier independent test outputs are historical.",
+  "baseline": {
+    "nodes": 140,
+    "relationships": 170,
+    "isolatedCategories": [
+      "Pasta",
+      "Salads"
+    ]
+  },
+  "analytics": {
+    "storedPairs": 9,
+    "completedUnits": 24,
+    "projectedNodes": 20,
+    "projectedAdjacencyEntries": 18,
+    "components": {
+      "size2": 9,
+      "size1": 2
+    }
+  },
+  "alternativeValidation": {
+    "ordersChecked": 20,
+    "mismatchedOrders": 0,
+    "linesChecked": 20,
+    "mismatchedLines": 0
+  },
+  "profile": {
+    "original": {
+      "rows": 20,
+      "dbAccesses": 301,
+      "timeMs": 101,
+      "memoryBytes": 2824
+    },
+    "alternative": {
+      "rows": 20,
+      "dbAccesses": 201,
+      "timeMs": 60,
+      "memoryBytes": 2816
+    }
+  },
+  "timingLimitation": "Single PROFILE runs; no general speedup claim."
+}

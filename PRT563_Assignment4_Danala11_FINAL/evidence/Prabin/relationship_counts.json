@@ -1,0 +1,50 @@
+[
+  {
+    "relationshipType": "CONTAINS",
+    "total": 20
+  },
+  {
+    "relationshipType": "FULFILLED_BY",
+    "total": 10
+  },
+  {
+    "relationshipType": "HAS_ADDRESS",
+    "total": 10
+  },
+  {
+    "relationshipType": "HAS_VARIANT",
+    "total": 10
+  },
+  {
+    "relationshipType": "IN_CATEGORY",
+    "total": 10
+  },
+  {
+    "relationshipType": "PERFORMS",
+    "total": 10
+  },
+  {
+    "relationshipType": "PLACES",
+    "total": 20
+  },
+  {
+    "relationshipType": "PROCESSES",
+    "total": 20
+  },
+  {
+    "relationshipType": "SELECTS",
+    "total": 20
+  },
+  {
+    "relationshipType": "SETTLED_BY",
+    "total": 20
+  },
+  {
+    "relationshipType": "TO_ADDRESS",
+    "total": 10
+  },
+  {
+    "relationshipType": "WORKS_AT",
+    "total": 10
+  }
+]

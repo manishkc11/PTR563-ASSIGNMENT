@@ -1,0 +1,72 @@
+// ============================================================
+// PRT563 Assignment 4 - Task 3 Graph Database Queries
+// Group: Danala 11
+// ============================================================
+
+// ============================================================
+// Query 1 - Himanshu
+// Practical scenario:
+// Find available menu variants priced from $10 to $20 that have
+// a specified crust type.
+// ============================================================
+MATCH (v:MenuVariant)
+WHERE v.currentPrice >= 10 AND v.currentPrice <= 20
+  AND v.crustType IS NOT NULL
+  AND v.availabilityStatus = 'Available'
+RETURN v.variantId AS variantId,
+       v.size AS size,
+       v.crustType AS crustType,
+       v.currentPrice AS price
+ORDER BY variantId;
+
+// ============================================================
+// Query 2 - Manish
+// Practical scenario:
+// Operations staff need one view of each delivery order showing
+// the customer, processing store, assigned driver, order status,
+// delivery tracking status and destination suburb.
+// ============================================================
+MATCH (c:Customer)-[:PLACES]->(o:Order:DeliveryOrder)
+MATCH (s:Store)-[:PROCESSES]->(o)
+MATCH (o)-[:FULFILLED_BY]->(d:Delivery)
+MATCH (dr:Driver)-[:PERFORMS]->(d)
+MATCH (d)-[:TO_ADDRESS]->(a:Address)
+RETURN
+    o.orderId AS orderId,
+    c.firstName + ' ' + c.lastName AS customer,
+    s.storeName AS store,
+    dr.firstName + ' ' + dr.lastName AS driver,
+    o.orderStatus AS orderStatus,
+    d.trackerStatus AS deliveryStatus,
+    a.suburb AS destinationSuburb
+ORDER BY o.orderId;
+
+// ============================================================
+// Query 3 - Saqib
+// Practical scenario:
+// Identify stores whose average value of paid orders is above
+// the overall average paid order value.
+// ============================================================
+MATCH (p2:Payment)
+WHERE p2.paymentStatus = 'Paid'
+WITH avg(p2.paymentAmount) AS globalAverage
+MATCH (s:Store)-[:PROCESSES]->(:Order)-[:SETTLED_BY]->(p:Payment)
+WHERE p.paymentStatus = 'Paid'
+WITH s, globalAverage, avg(p.paymentAmount) AS storeAverage
+WHERE storeAverage > globalAverage
+RETURN s.storeName AS Store,
+       round(storeAverage, 2) AS AvgOrderValue,
+       round(globalAverage, 3) AS GlobalAvgOrderValue
+ORDER BY AvgOrderValue DESC, Store;
+
+// ============================================================
+// Query 4 - Prabin
+// Practical scenario:
+// Summarise each customer's number of orders and total spending
+// to identify higher-value customers.
+// ============================================================
+MATCH (c:Customer)-[:PLACES]->(o:Order)-[:SETTLED_BY]->(p:Payment)
+RETURN c.customerId AS customerId,
+       count(DISTINCT o) AS totalOrders,
+       round(sum(p.paymentAmount), 2) AS totalSpent
+ORDER BY totalSpent DESC;
